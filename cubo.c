@@ -1,16 +1,3 @@
-// CUBO ARCHITECTURE V4.1 (Cross-Platform, Multi-Arch, Optimizing JIT)
-// A multi-stage JIT compiler for a C subset with variables, expressions,
-// if-else, while loops, and multiple optimization levels.
-//
-// FIXES IN V4.1:
-// - Corrected all AArch64 macro definitions to be type-safe (casting to uint8_t*).
-// - Wrapped macro bodies in do{...}while(0) to prevent variable redefinition errors and fix C90 compliance.
-// - Defined a named 'JumpPatch' struct to fix incompatible anonymous struct assignment errors.
-// - Created a common RETURN_OP macro to fix architecture-specific return sequence errors.
-// - Corrected stack alignment and variable offset calculations in AArch64 backend.
-// - Fixed scope management logic in `end_scope` to correctly pop local variables.
-//
-
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +12,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 #ifdef _WIN32
 #include <windows.h>
-#else // POSIX-like systems (Linux, macOS, Termux)
+#else
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
@@ -123,15 +110,15 @@ int main(int argc, char **argv) {
     free(source); return exit_code;
 }
 
-// ┌──────────────────────────────────────────────────────────────────────────┐
-// │                  FULL IMPLEMENTATION DETAILS BELOW                       │
-// └──────────────────────────────────────────────────────────────────────────┘
-
-// Utility Functions
+// ────────────────────────────────────────────────────────────────────────────
+//  Utility Functions
+// ────────────────────────────────────────────────────────────────────────────
 void fail(const char *fmt, ...) { fprintf(stderr, "Error: "); va_list args; va_start(args, fmt); vfprintf(stderr, fmt, args); va_end(args); fprintf(stderr, "\n"); exit(1); }
 void fail_at(int line, int col, const char *fmt, ...) { fprintf(stderr, "Error at line %d, col %d: ", line, col); va_list args; va_start(args, fmt); vfprintf(stderr, fmt, args); va_end(args); fprintf(stderr, "\n"); exit(1); }
 
-// ======================= LEXER =======================
+// ────────────────────────────────────────────────────────────────────────────
+//  Lexer
+// ────────────────────────────────────────────────────────────────────────────
 void advance_lexer(Compiler* c) { if (*c->cursor == '\n') { c->line++; c->col = 1; } else { c->col++; } c->cursor++; }
 Token make_token(Compiler* c, TokenType type, const char* s, int l) { return (Token){type,s,l,c->line,c->col-l}; }
 void get_next_token(Compiler* c) {
@@ -164,7 +151,9 @@ void get_next_token(Compiler* c) {
 }
 void consume(Compiler* c, TokenType type, const char* msg) { if (c->current_token.type == type) get_next_token(c); else fail_at(c->current_token.line, c->current_token.col, "%s", msg); }
 
-// ======================= PARSER (Builds AST) =======================
+// ────────────────────────────────────────────────────────────────────────────
+//  Parser (AST Builder)
+// ────────────────────────────────────────────────────────────────────────────
 ASTNode* new_ast_node(NodeType type, Token token) { ASTNode* node = calloc(1, sizeof(ASTNode)); if (!node) fail("AST node allocation failed."); node->type = type; node->token = token; return node; }
 ASTNode* parse_expression(Compiler* c); ASTNode* parse_statement(Compiler* c);
 ASTNode* parse_primary(Compiler* c) {
@@ -223,7 +212,9 @@ ASTNode* parse_statement(Compiler* c) {
     ASTNode* expr = parse_expression(c); consume(c, T_SEMICOLON, "Expected ';'"); return expr;
 }
 
-// ======================= OPTIMIZER =======================
+// ────────────────────────────────────────────────────────────────────────────
+//  Optimizer
+// ────────────────────────────────────────────────────────────────────────────
 bool eval_ast(ASTNode* node, int* result) {
     if (node->type == NODE_NUMBER) { *result = strtol(node->token.start, NULL, 10); return true; }
     if (node->type == NODE_BINARY) {
@@ -262,7 +253,9 @@ void optimize_bytecode(Compiler* c) {
     c->code_count = new_count;
 }
 
-// ======================= BYTECODE EMITTER =======================
+// ────────────────────────────────────────────────────────────────────────────
+//  Bytecode Emitter
+// ────────────────────────────────────────────────────────────────────────────
 void emit_op(Compiler* c, OpCode op, int32_t opd) { c->code[c->code_count]=op; c->code_operands[c->code_count]=opd; c->code_count++; }
 int add_local(Compiler* c, Token name) {
     for (int i=c->local_count-1; i>=0 && c->locals[i].depth==c->scope_depth; --i) if (name.length == strlen(c->locals[i].name) && strncmp(name.start,c->locals[i].name,name.length)==0) fail_at(name.line,name.col,"Variable '%.*s' already declared in this scope",name.length,name.start);
@@ -302,7 +295,9 @@ void emit_bytecode_from_ast(Compiler* c, ASTNode* node) {
     if (node->type < NODE_RETURN || node->type > NODE_BLOCK) emit_bytecode_from_ast(c, node->next);
 }
 
-// ======================= JIT BACKEND (Multi-Arch) =======================
+// ────────────────────────────────────────────────────────────────────────────
+//  JIT Backend (Multi-Arch)
+// ────────────────────────────────────────────────────────────────────────────
 void jit_emit(Compiler* c, uint8_t* data, size_t size) { memcpy(c->jit_buf + c->jit_size, data, size); c->jit_size += size; }
 void jit_compile(Compiler* c) {
     #if defined(__x86_64__)
@@ -323,7 +318,13 @@ void jit_compile(Compiler* c) {
     #define POP(reg) do { uint32_t i = 0xf84107e0 | (reg); jit_emit(c, (uint8_t*)&i, 4); } while(0)
     #define PUSH(reg) do { uint32_t i = 0xf81f0fe0 | (reg); jit_emit(c, (uint8_t*)&i, 4); } while(0)
     #define RETURN_OP() do { POP(0); EPILOGUE(); } while(0)
-    #define PUSH_IMM(opd) do { uint32_t m[]={0xd2800000 | (((uint32_t)opd&0xffff)<<5), 0xf90003e0}; jit_emit(c,(uint8_t*)m,8); } while(0)
+    #define PUSH_IMM(opd) do { \
+        uint32_t ldr_instr = 0x58000020; \
+        jit_emit(c, (uint8_t*)&ldr_instr, 4); \
+        int32_t literal = opd; \
+        jit_emit(c, (uint8_t*)&literal, 4); \
+        PUSH(0); \
+    } while(0)
     #define BIN_OP(add_op,sub_op,mul_op,div_op) do { POP(1);POP(0); uint32_t i=0; if(op==OP_ADD)i=add_op; else if(op==OP_SUB)i=sub_op; else if(op==OP_MUL)i=mul_op; else if(op==OP_DIV)i=div_op; jit_emit(c,(uint8_t*)&i,4); PUSH(0); } while(0)
     #define CMP_OP(cond) do { POP(1); POP(0); jit_emit(c,(uint8_t*)(uint32_t[]){0xeb01001f},4); uint32_t i=0x9a801000|(cond<<12); jit_emit(c,(uint8_t*)&i,4); PUSH(0); } while(0)
     #define STORE_VAR(opd) do { uint32_t m=0xb8000400 | (((-c->locals[opd].stack_offset)&0x1ff)<<12); POP(0); jit_emit(c,(uint8_t*)&m,4); } while(0)
@@ -360,18 +361,20 @@ void jit_compile(Compiler* c) {
         *(int32_t*)(c->jit_buf + patch_loc) = offset;
         #elif defined(__aarch64__)
         uint32_t* instr = (uint32_t*)(c->jit_buf + patch_loc);
-        if ((*instr & 0xff000000) == 0xb4000000) *instr |= ((offset/4)&0x7ffff)<<5; // cbz
-        else *instr |= ((offset/4)&0x3ffffff); // b
+        if ((*instr & 0xff000000) == 0xb4000000) *instr |= ((offset/4)&0x7ffff)<<5;
+        else *instr |= ((offset/4)&0x3ffffff);
         #endif
     }
     free(jump_targets);
 }
 
-// ======================= COMPILER & EXECUTION =======================
+// ────────────────────────────────────────────────────────────────────────────
+//  Compiler & Execution
+// ────────────────────────────────────────────────────────────────────────────
 void compile(Compiler* c) {
     get_next_token(c);
     consume(c, T_INT, "Expected 'int' at start of program.");
-    consume(c, T_IDENTIFIER, "Expected 'main' after 'int'."); // Assuming main
+    consume(c, T_IDENTIFIER, "Expected 'main' after 'int'.");
     consume(c, T_LPAREN, "Expected '(' after 'main'."); consume(c, T_RPAREN, "Expected ')' after 'main()'.");
     c->ast_root = parse_statement(c);
     if(c->optimization_level >= 1) optimize_ast(c, &c->ast_root);
@@ -380,6 +383,7 @@ void compile(Compiler* c) {
     c->jit_buf = pal_alloc_exec_mem(MAX_CODE_SIZE); if (!c->jit_buf) fail("Failed to allocate executable memory.");
     jit_compile(c);
 }
+
 int execute(Compiler* c) {
     if (!pal_protect_exec(c->jit_buf, c->jit_size)) fail("Failed to make memory executable.");
     int (*jit_func)() = (int(*)())c->jit_buf;
