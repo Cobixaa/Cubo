@@ -311,4 +311,79 @@ void jit_compile(Compiler* c) {
     #define POP_RAX() do { jit_emit(c,(uint8_t[]){0x58},1); } while(0)
     #define RETURN_OP() do { POP_RAX(); EPILOGUE(); } while(0)
     #define PUSH_IMM(opd) do { uint8_t p[]={0x68,0,0,0,0}; *(uint32_t*)(p+1)=(uint32_t)opd; jit_emit(c,p,5); } while(0)
-    #define BIN_OP(add_op,sub_op,mul_op,div_op) do { uint8_t p_rbx[]={0x5b}, p_rax[]={0x58}, push_rax[]={0x50}; jit_emit(c,p_rbx,1); jit_emit(c,p_rax,1); if(op==OP_ADD)jit_emit(c,(uint8_t[])add_op,3); else if(op==OP_SUB)jit_emit(c,(uint8_t[])sub_op,3); else if(op==OP_MUL)jit_emit(c,(uint8_t[])mul_op,4); else if(op==OP_DIV){
+    #define BIN_OP(add_op,sub_op,mul_op,div_op) do { uint8_t p_rbx[]={0x5b}, p_rax[]={0x58}, push_rax[]={0x50}; jit_emit(c,p_rbx,1); jit_emit(c,p_rax,1); if(op==OP_ADD)jit_emit(c,(uint8_t[])add_op,3); else if(op==OP_SUB)jit_emit(c,(uint8_t[])sub_op,3); else if(op==OP_MUL)jit_emit(c,(uint8_t[])mul_op,4); else if(op==OP_DIV){jit_emit(c,(uint8_t[]){0x99},1); jit_emit(c,(uint8_t[])div_op,3);} jit_emit(c,push_rax,1); } while(0)
+    #define CMP_OP(setcc) do { uint8_t p_rbx[]={0x5b}, p_rax[]={0x58}, cmp[]={0x48,0x39,0xd8}, set[]={0x0f,setcc,0xc0}, movzx[]={0x48,0x0f,0xb6,0xc0}, push[]={0x50}; jit_emit(c,p_rbx,1); jit_emit(c,p_rax,1); jit_emit(c,cmp,3); jit_emit(c,set,3); jit_emit(c,movzx,4); jit_emit(c,push,1); } while(0)
+    #define STORE_VAR(opd) do { uint8_t m[]={0x48,0x89,0x45,0};m[3]=(uint8_t)-c->locals[opd].stack_offset; POP_RAX(); jit_emit(c,m,4); } while(0)
+    #define LOAD_VAR(opd) do { uint8_t m[]={0x48,0x8b,0x45,0};m[3]=(uint8_t)-c->locals[opd].stack_offset; jit_emit(c,m,4); jit_emit(c,(uint8_t[]){0x50},1); } while(0)
+    #define JMP_IF_FALSE() do { POP_RAX(); jit_emit(c,(uint8_t[]){0x48,0x85,0xc0},3); jit_emit(c,(uint8_t[]){0x0f,0x84,0,0,0,0},6); c->jump_patches[c->jump_patch_count++]=(JumpPatch){(int)c->jit_size-4, operand}; } while(0)
+    #define JMP() do { jit_emit(c,(uint8_t[]){0xe9,0,0,0,0},5); c->jump_patches[c->jump_patch_count++]=(JumpPatch){(int)c->jit_size-4, operand}; } while(0)
+    #elif defined(__aarch64__)
+    #define PROLOGUE() do { jit_emit(c, (uint8_t*)(uint32_t[]){0xa9bf7bfd, 0x910003fd}, 8); if (c->stack_top > 0) { int aligned_stack = (c->stack_top + 15) & ~15; uint32_t s = 0xd1000000 | (0x1f) | ((uint32_t)aligned_stack << 5); jit_emit(c,(uint8_t*)&s,4); } } while(0)
+    #define EPILOGUE() do { if (c->stack_top > 0) { int aligned_stack = (c->stack_top + 15) & ~15; uint32_t s = 0x91000000 | (0x1f) | ((uint32_t)aligned_stack << 5); jit_emit(c,(uint8_t*)&s,4); } jit_emit(c, (uint8_t*)(uint32_t[]){0xa8c17bfd, 0xd65f03c0}, 8); } while(0)
+    #define POP(reg) do { uint32_t i = 0xf84107e0 | (reg); jit_emit(c, (uint8_t*)&i, 4); } while(0)
+    #define PUSH(reg) do { uint32_t i = 0xf81f0fe0 | (reg); jit_emit(c, (uint8_t*)&i, 4); } while(0)
+    #define RETURN_OP() do { POP(0); EPILOGUE(); } while(0)
+    #define PUSH_IMM(opd) do { uint32_t m[]={0xd2800000 | (((uint32_t)opd&0xffff)<<5), 0xf90003e0}; jit_emit(c,(uint8_t*)m,8); } while(0)
+    #define BIN_OP(add_op,sub_op,mul_op,div_op) do { POP(1);POP(0); uint32_t i=0; if(op==OP_ADD)i=add_op; else if(op==OP_SUB)i=sub_op; else if(op==OP_MUL)i=mul_op; else if(op==OP_DIV)i=div_op; jit_emit(c,(uint8_t*)&i,4); PUSH(0); } while(0)
+    #define CMP_OP(cond) do { POP(1); POP(0); jit_emit(c,(uint8_t*)(uint32_t[]){0xeb01001f},4); uint32_t i=0x9a801000|(cond<<12); jit_emit(c,(uint8_t*)&i,4); PUSH(0); } while(0)
+    #define STORE_VAR(opd) do { uint32_t m=0xb8000400 | (((-c->locals[opd].stack_offset)&0x1ff)<<12); POP(0); jit_emit(c,(uint8_t*)&m,4); } while(0)
+    #define LOAD_VAR(opd) do { uint32_t m=0xb8400400 | (((-c->locals[opd].stack_offset)&0x1ff)<<12); jit_emit(c,(uint8_t*)&m,4); PUSH(0); } while(0)
+    #define JMP_IF_FALSE() do { POP(0); jit_emit(c, (uint8_t*)(uint32_t[]){0xb4000000}, 4); c->jump_patches[c->jump_patch_count++]=(JumpPatch){(int)c->jit_size-4, operand}; } while(0)
+    #define JMP() do { jit_emit(c, (uint8_t*)(uint32_t[]){0x14000000}, 4); c->jump_patches[c->jump_patch_count++]=(JumpPatch){(int)c->jit_size-4, operand}; } while(0)
+    #else
+    #error "Cubo JIT is not supported on this architecture."
+    #endif
+    
+    PROLOGUE();
+    int* jump_targets = calloc(c->code_count + 1, sizeof(int));
+    for (int i=0; i < c->code_count; ++i) {
+        jump_targets[i] = c->jit_size;
+        OpCode op = c->code[i]; int32_t operand = c->code_operands[i];
+        switch(op) {
+            case OP_PUSH: PUSH_IMM(operand); break;
+            case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: BIN_OP(0x8b010000, 0xcb010000, 0x9b017c00, 0x9ac10c00); break;
+            case OP_EQ: CMP_OP(0b0001); break; case OP_NEQ: CMP_OP(0b0000); break;
+            case OP_LT: CMP_OP(0b1011); break; case OP_GT: CMP_OP(0b1101); break;
+            case OP_STORE_VAR: STORE_VAR(operand); break;
+            case OP_LOAD_VAR: LOAD_VAR(operand); break;
+            case OP_JUMP_IF_FALSE: JMP_IF_FALSE(); break;
+            case OP_JUMP: JMP(); break;
+            case OP_RETURN: RETURN_OP(); break;
+            default: break;
+        }
+    }
+    jump_targets[c->code_count] = c->jit_size;
+    for (int i=0; i<c->jump_patch_count; ++i) {
+        int patch_loc = c->jump_patches[i].loc; int target_loc = jump_targets[c->jump_patches[i].target];
+        int32_t offset = target_loc - patch_loc;
+        #if defined(__x86_64__)
+        *(int32_t*)(c->jit_buf + patch_loc) = offset;
+        #elif defined(__aarch64__)
+        uint32_t* instr = (uint32_t*)(c->jit_buf + patch_loc);
+        if ((*instr & 0xff000000) == 0xb4000000) *instr |= ((offset/4)&0x7ffff)<<5; // cbz
+        else *instr |= ((offset/4)&0x3ffffff); // b
+        #endif
+    }
+    free(jump_targets);
+}
+
+// ======================= COMPILER & EXECUTION =======================
+void compile(Compiler* c) {
+    get_next_token(c);
+    consume(c, T_INT, "Expected 'int' at start of program.");
+    consume(c, T_IDENTIFIER, "Expected 'main' after 'int'."); // Assuming main
+    consume(c, T_LPAREN, "Expected '(' after 'main'."); consume(c, T_RPAREN, "Expected ')' after 'main()'.");
+    c->ast_root = parse_statement(c);
+    if(c->optimization_level >= 1) optimize_ast(c, &c->ast_root);
+    emit_bytecode_from_ast(c, c->ast_root);
+    if(c->optimization_level >= 2) optimize_bytecode(c);
+    c->jit_buf = pal_alloc_exec_mem(MAX_CODE_SIZE); if (!c->jit_buf) fail("Failed to allocate executable memory.");
+    jit_compile(c);
+}
+int execute(Compiler* c) {
+    if (!pal_protect_exec(c->jit_buf, c->jit_size)) fail("Failed to make memory executable.");
+    int (*jit_func)() = (int(*)())c->jit_buf;
+    int result = jit_func();
+    pal_free_exec_mem(c->jit_buf, MAX_CODE_SIZE);
+    return result;
+}
